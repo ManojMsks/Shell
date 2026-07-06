@@ -85,6 +85,14 @@ int lsh_execute(char **args)
     // An empty command was entered.
     return 1;
   }
+  
+  for (int i = 0; args[i] != NULL; i++) {
+    if (strcmp(args[i], "|") == 0) {
+        args[i] = NULL;        // split into two arrays
+        return lsh_execute_pipe(args, &args[i+1]);
+    }
+}
+// no pipe found → normal flow
 
   for (i = 0; i < lsh_num_builtins(); i++) {
     if (strcmp(args[0], builtin_str[i]) == 0) {
@@ -177,4 +185,45 @@ int main(int argc, char **argv)
   // Perform any shutdown/cleanup.
 
   return EXIT_SUCCESS;
+}
+
+
+
+
+
+int lsh_execute_pipe(char **cmd1, char **cmd2) {
+    int fd[2];
+    pipe(fd);
+    
+    pid_t pid1 = fork();
+    if (pid1 == 0) {
+        // child1 runs cmd1 (ls)
+        dup2(fd[1], STDOUT_FILENO);  // stdout → pipe write end
+        close(fd[0]);                // don't need read end
+        close(fd[1]);
+        execvp(cmd1[0], cmd1);
+        perror("lsh");
+        exit(EXIT_FAILURE);
+    }
+    
+    pid_t pid2 = fork();
+    if (pid2 == 0) {
+        // child2 runs cmd2 (grep)
+        dup2(fd[0], STDIN_FILENO);   // stdin → pipe read end
+        close(fd[1]);                // don't need write end
+        close(fd[0]);
+        execvp(cmd2[0], cmd2);
+        perror("lsh");
+        exit(EXIT_FAILURE);
+    }
+    
+    // parent closes both ends
+    close(fd[0]);
+    close(fd[1]);
+    
+    // wait for both
+    waitpid(pid1, NULL, 0);
+    waitpid(pid2, NULL, 0);
+    
+    return 1;
 }
