@@ -99,7 +99,9 @@ int lsh_launch(char **args, char *outfile, int out_flags, char *infile)
             dup2(fd, STDIN_FILENO);
             close(fd); /* fd is duplicated onto stdin, original not needed */
         }
-
+				signal(SIGINT,  SIG_DFL);
+				signal(SIGQUIT, SIG_DFL);
+			signal(SIGTSTP, SIG_DFL);
         /* Replace child process image with the command.
            If execvp returns, it failed — exit so we don't
            run a second copy of the shell. */
@@ -286,6 +288,9 @@ void lsh_loop(void)
    ───────────────────────────────────────────── */
 int main(int argc, char **argv)
 {
+		signal(SIGINT,  SIG_IGN);
+		signal(SIGQUIT, SIG_IGN);
+		signal(SIGTSTP, SIG_IGN);
     lsh_loop();
     return EXIT_SUCCESS;
 }
