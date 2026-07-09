@@ -9,7 +9,6 @@
 /* ─────────────────────────────────────────────
    Forward declarations
    ───────────────────────────────────────────── */
-int lsh_execute_pipe(char **cmd1, char **cmd2);
 int lsh_cd(char **args);
 int lsh_exit(char **args);
 int lsh_execute_multipipe(char **args);
