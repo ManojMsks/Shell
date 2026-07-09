@@ -106,7 +106,7 @@ int lsh_launch(char **args, char *outfile, int out_flags, char *infile)
            If execvp returns, it failed — exit so we don't
            run a second copy of the shell. */
         if (execvp(args[0], args) == -1) {
-            perror("lsh");
+           fprintf(stderr, "lsh: command not found: %s\n", args[0]);
         }
         exit(EXIT_FAILURE);
 
@@ -355,7 +355,7 @@ int lsh_execute_multipipe(char **args) {
             }
 
             execvp(cmds[i][0], cmds[i]);
-            perror("lsh");
+            fprintf(stderr, "lsh: command not found: %s\n", cmds[i][0]);
             exit(EXIT_FAILURE);
         }
     }
