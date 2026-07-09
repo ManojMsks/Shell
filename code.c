@@ -12,6 +12,7 @@
 int lsh_execute_pipe(char **cmd1, char **cmd2);
 int lsh_cd(char **args);
 int lsh_exit(char **args);
+int lsh_execute_multipipe(char **args);
 
 /* ─────────────────────────────────────────────
    Builtins table
@@ -148,10 +149,9 @@ int lsh_execute(char **args)
        Split args into two at the | position.
        args becomes cmd1, &args[i+1] becomes cmd2. */
     for (i = 0; args[i] != NULL; i++) {
-        if (strcmp(args[i], "|") == 0) {
-            args[i] = NULL;
-            return lsh_execute_pipe(args, &args[i + 1]);
-        }
+    if (strcmp(args[i], "|") == 0) {
+        return lsh_execute_multipipe(args);
+    }
     }
 
     /* Check builtins — cd and exit must run in the
@@ -239,7 +239,6 @@ char **lsh_split_line(char *line)
     token = strtok(line, LSH_TOK_DELIM);
     while (token != NULL) {
         tokens[position++] = token;
-
         /* Grow the array if we're out of slots */
         if (position >= bufsize) {
             bufsize       += LSH_TOK_BUFSIZE;
@@ -296,62 +295,82 @@ int main(int argc, char **argv)
 }
 
 /* ─────────────────────────────────────────────
-   lsh_execute_pipe
+   lsh_execute_multipipe 
    Handles cmd1 | cmd2.
+   handles multiple no of pipes too.
    Creates a pipe, forks two children:
-     child1 writes cmd1 stdout into pipe write end
-     child2 reads  cmd2 stdin  from pipe read end
+    child1 writes cmd1 stdout into pipe write end
+    child2 reads  cmd2 stdin  from pipe read end
    Parent closes both ends BEFORE waiting to
    avoid deadlock when pipe buffer fills up.
    ───────────────────────────────────────────── */
-int lsh_execute_pipe(char **cmd1, char **cmd2)
-{
-    int fd[2];
+int lsh_execute_multipipe(char **args) {
+    char **cmds[64];
+    int    num_cmds = 0;
+    int    pipes[64][2];
+    int    i;
 
-    if (pipe(fd) < 0) {
-        perror("lsh: pipe");
-        return 1;
+    // split args into commands array
+    cmds[num_cmds++] = args;
+    for (i = 0; args[i] != NULL; i++) {
+        if (strcmp(args[i], "|") == 0) {
+            args[i] = NULL;
+            cmds[num_cmds++] = &args[i + 1];
+        }
     }
 
-    /* ── Child 1: runs cmd1, writes stdout into pipe ── */
-    pid_t pid1 = fork();
-    if (pid1 < 0) {
-        perror("lsh: fork");
-        return 1;
-    }
-    if (pid1 == 0) {
-        dup2(fd[1], STDOUT_FILENO); /* stdout → pipe write end */
-        close(fd[0]);               /* child1 doesn't read from pipe */
-        close(fd[1]);               /* already duplicated, close original */
-        execvp(cmd1[0], cmd1);
-        perror("lsh");
-        exit(EXIT_FAILURE);
+    // create num_cmds-1 pipes
+    for (i = 0; i < num_cmds - 1; i++) {
+        if (pipe(pipes[i]) < 0) {
+            perror("lsh: pipe");
+            return 1;
+        }
     }
 
-    /* ── Child 2: runs cmd2, reads stdin from pipe ── */
-    pid_t pid2 = fork();
-    if (pid2 < 0) {
-        perror("lsh: fork");
-        return 1;
-    }
-    if (pid2 == 0) {
-        dup2(fd[0], STDIN_FILENO);  /* stdin → pipe read end */
-        close(fd[1]);               /* child2 doesn't write to pipe */
-        close(fd[0]);               /* already duplicated, close original */
-        execvp(cmd2[0], cmd2);
-        perror("lsh");
-        exit(EXIT_FAILURE);
+    // fork a child for each command
+    for (i = 0; i < num_cmds; i++) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            perror("lsh: fork");
+            return 1;
+        }
+        if (pid == 0) {
+            // reset signals — child should respond to Ctrl+C
+            signal(SIGINT,  SIG_DFL);
+            signal(SIGQUIT, SIG_DFL);
+            signal(SIGTSTP, SIG_DFL);
+
+            // read from previous pipe if not first command
+            if (i > 0) {
+                dup2(pipes[i-1][0], STDIN_FILENO);
+            }
+            // write to current pipe if not last command
+            if (i < num_cmds - 1) {
+                dup2(pipes[i][1], STDOUT_FILENO);
+            }
+
+            // close all pipe fds — child only needs what it dup2'd
+            for (int j = 0; j < num_cmds - 1; j++) {
+                close(pipes[j][0]);
+                close(pipes[j][1]);
+            }
+
+            execvp(cmds[i][0], cmds[i]);
+            perror("lsh");
+            exit(EXIT_FAILURE);
+        }
     }
 
-    /* ── Parent: close both ends before waiting ──
-       If parent keeps fd[1] open, child2 (grep) never gets EOF
-       because the pipe still has a writer — it hangs forever.
-       Closing first ensures EOF is sent when child1 exits. */
-    close(fd[0]);
-    close(fd[1]);
+    // parent closes all pipe ends
+    for (i = 0; i < num_cmds - 1; i++) {
+        close(pipes[i][0]);
+        close(pipes[i][1]);
+    }
 
-    waitpid(pid1, NULL, 0);
-    waitpid(pid2, NULL, 0);
+    // wait for all children, if we didnt wait then child processes would become zombie processes and we would have to kill them manually
+    for (i = 0; i < num_cmds; i++) {
+        wait(NULL);
+    }
 
     return 1;
 }
