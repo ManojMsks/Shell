@@ -68,7 +68,7 @@ int lsh_exit(char **args)
    out_flags — open() flags: O_TRUNC for >, O_APPEND for >>
    infile    — filename for stdin redirection (or NULL)
    ───────────────────────────────────────────── */
-int lsh_launch(char **args, char *outfile, int out_flags, char *infile)
+int lsh_launch(char **args, char *outfile, int out_flags, char *infile, int background) 
 {
     pid_t pid;
     int status;
@@ -119,6 +119,11 @@ int lsh_launch(char **args, char *outfile, int out_flags, char *infile)
            Block until child exits normally or is killed by a signal.
            Loop handles WUNTRACED: waitpid can return early if child
            is stopped (Ctrl+Z) — we keep waiting until it's truly done. */
+		if (background) {
+            printf("[bg] started process %d\n", pid);
+            return 1; // Do NOT call waitpid here!
+        }
+		
         do {
             waitpid(pid, &status, WUNTRACED);
         } while (!WIFEXITED(status) && !WIFSIGNALED(status));
@@ -161,6 +166,16 @@ int lsh_execute(char **args)
         }
     }
 
+	// Check for trailing '&'
+    int background = 0;
+    int argc = 0;
+    while (args[argc] != NULL) argc++;
+
+    if (argc > 0 && strcmp(args[argc - 1], "&") == 0) {
+        background = 1;
+        args[argc - 1] = NULL; // Remove '&' so execvp doesn't see it
+    }
+
     /* Scan for redirection operators.
        Save filename and open() flags, then null-terminate
        args at the operator so execvp doesn't see > or filename. */
@@ -186,7 +201,7 @@ int lsh_execute(char **args)
         }
     }
 
-    return lsh_launch(args, outfile, out_flags, infile);
+    return lsh_launch(args, outfile, out_flags, infile, background);
 }
 
 /* ─────────────────────────────────────────────
@@ -269,6 +284,12 @@ void lsh_loop(void)
     int    status;
 
     do {
+		// Non-blocking reap: collects any background child that finished
+        pid_t bg_pid;
+        while ((bg_pid = waitpid(-1, NULL, WNOHANG)) > 0) {
+            printf("[bg] process %d finished\n", bg_pid);
+        }
+		
         printf("> ");
         fflush(stdout); /* ensure prompt appears before blocking on input */
 
